@@ -51,3 +51,9 @@ def get_page(url: str) -> str:
     """
     response = requests.get(url)
     return response.text
+
+
+if __name__ == "__main__":
+    # Example usage
+    slow_url = "http://slowwly.robertomurray.co.uk/delay/10000/url/http://www.example.com"
+    print(get_page(slow_url))

@@ -1,115 +1,153 @@
 #!/usr/bin/env python3
-
-from typing import Callable, Optional, Union
-from uuid import uuid4
+"""
+Module for Cache class
+"""
 import redis
+import uuid
+from typing import Union, Callable
 from functools import wraps
-
-'''
-    Writing strings to Redis.
-'''
 
 
 def count_calls(method: Callable) -> Callable:
-    '''
-        Counts the number of times a method is called.
-    '''
+    """
+    Decorator to count the number of calls to a method.
 
+    Args:
+        method (Callable): The method to be decorated.
+
+    Returns:
+        Callable: The decorated method.
+    """
     @wraps(method)
     def wrapper(self, *args, **kwargs):
-        '''
-            Wrapper function.
-        '''
         key = method.__qualname__
         self._redis.incr(key)
         return method(self, *args, **kwargs)
+
     return wrapper
 
 
 def call_history(method: Callable) -> Callable:
-    """ Decorator to store the history of inputs and
-    outputs for a particular function.
     """
-    key = method.__qualname__
-    inputs = key + ":inputs"
-    outputs = key + ":outputs"
+    Decorator to store the history of inputs and outputs.
 
+    Args:
+        method (Callable): The method to be decorated.
+
+    Returns:
+        Callable: The decorated method.
+    """
     @wraps(method)
-    def wrapper(self, *args, **kwargs):  # sourcery skip: avoid-builtin-shadow
-        """ Wrapper for decorator functionality """
-        self._redis.rpush(inputs, str(args))
-        data = method(self, *args, **kwargs)
-        self._redis.rpush(outputs, str(data))
-        return data
+    def wrapper(self, *args, **kwargs):
+        key_inputs = "{}:inputs".format(method.__qualname__)
+        key_outputs = "{}:outputs".format(method.__qualname__)
+
+        # Append the input arguments to the input list
+        self._redis.rpush(key_inputs, str(args))
+
+        # Execute the wrapped function to retrieve the output
+        output = method(self, *args, **kwargs)
+
+        # Store the output in the output list
+        self._redis.rpush(key_outputs, output)
+
+        return output
 
     return wrapper
 
 
-def replay(method: Callable) -> None:
-    # sourcery skip: use-fstring-for-concatenation, use-fstring-for-formatting
-    """
-    Replays the history of a function
-    Args:
-        method: The function to be decorated
-    Returns:
-        None
-    """
-    name = method.__qualname__
-    cache = redis.Redis()
-    calls = cache.get(name).decode("utf-8")
-    print("{} was called {} times:".format(name, calls))
-    inputs = cache.lrange(name + ":inputs", 0, -1)
-    outputs = cache.lrange(name + ":outputs", 0, -1)
-    for i, o in zip(inputs, outputs):
-        print("{}(*{}) -> {}".format(name, i.decode('utf-8'),
-                                     o.decode('utf-8')))
-
-
 class Cache:
-    '''
-        Cache class.
-    '''
+    """
+    Cache class for storing and retrieving data in/from Redis
+    """
+
     def __init__(self):
-        '''
-            Initialize the cache.
-        '''
+        """
+        Initializes a new instance of the Cache class.
+        """
         self._redis = redis.Redis()
         self._redis.flushdb()
 
     @count_calls
-    @call_history
     def store(self, data: Union[str, bytes, int, float]) -> str:
-        '''
-            Store data in the cache.
-        '''
-        randomKey = str(uuid4())
-        self._redis.set(randomKey, data)
-        return randomKey
+        """
+        Stores the input data in Redis using a random key generated with uuid.
 
-    def get(self, key: str,
-            fn: Optional[Callable] = None) -> Union[str, bytes, int, float]:
-        '''
-            Get data from the cache.
-        '''
-        value = self._redis.get(key)
-        if fn:
-            value = fn(value)
-        return value
+        Args:
+            data (Union[str, bytes, int, float]): The data to be stored.
 
-    def get_str(self, key: str) -> str:
-        '''
-            Get a string from the cache.
-        '''
-        value = self._redis.get(key)
-        return value.decode('utf-8')
+        Returns:
+            str: The randomly generated key used for storing the data in Redis.
+        """
+        key = str(uuid.uuid4())
+        self._redis.set(key, data)
+        return key
 
-    def get_int(self, key: str) -> int:
-        '''
-            Get an int from the cache.
-        '''
-        value = self._redis.get(key)
-        try:
-            value = int(value.decode('utf-8'))
-        except Exception:
-            value = 0
-        return value
+    def get(
+            self,
+            key: str,
+            fn: Callable = None
+            ) -> Union[str, bytes, int, float, None]:
+        """
+        Retrieves the data stored in Redis using the given key.
+
+        Args:
+            key (str): The key used to retrieve the data from Redis.
+            fn (Callable, optional): A callable function to
+            convert the data back to the desired format.
+
+        Returns:
+            Union[str, bytes, int, float, None]: The retrieved data.
+        """
+        data = self._redis.get(key)
+
+        if data is None:
+            return None
+
+        return fn(data) if fn else data
+
+    def get_str(self, key: str) -> Union[str, None]:
+        """
+        Retrieves and converts the data stored in Redis as a UTF-8 string.
+
+        Args:
+            key (str): The key used to retrieve the data from Redis.
+
+        Returns:
+            Union[str, None]: The retrieved data as a UTF-8 string.
+        """
+        return self.get(key, fn=lambda d: d.decode("utf-8"))
+
+    def get_int(self, key: str) -> Union[int, None]:
+        """
+        Retrieves and converts the data stored in Redis as an integer.
+
+        Args:
+            key (str): The key used to retrieve the data from Redis.
+
+        Returns:
+            Union[int, None]: The retrieved data as an integer.
+        """
+        return self.get(key, fn=int)
+
+
+def replay(func: Callable):
+    """
+    Displays the history of calls for a particular function.
+
+    Args:
+        func (Callable): The function for which the history
+        needs to be displayed.
+    """
+    key_inputs = "{}:inputs".format(func.__qualname__)
+    key_outputs = "{}:outputs".format(func.__qualname__)
+
+    inputs = [eval(args) for args in cache._redis.lrange(key_inputs, 0, -1)]
+    outputs = cache._redis.lrange(key_outputs, 0, -1)
+
+    print("{} was called {} times:".format(func.__qualname__, len(inputs)))
+    for args, output in zip(inputs, outputs):
+        print("{}{} -> {}".format(
+            func.__qualname__,
+            args,
+            output.decode("utf-8")))

@@ -1,38 +1,53 @@
 #!/usr/bin/env python3
-'''A module with tools for request caching and tracking.
-'''
-import redis
+"""
+web.py: Module to implement the get_page function.
+"""
+
 import requests
+import redis
 from functools import wraps
 from typing import Callable
 
-
-redis_store = redis.Redis()
-'''The module-level Redis instance.
-'''
-
-
-def data_cacher(method: Callable) -> Callable:
-    '''Caches the output of fetched data.
-    '''
-    @wraps(method)
-    def invoker(url) -> str:
-        '''The wrapper function for caching the output.
-        '''
-        redis_store.incr(f'count:{url}')
-        result = redis_store.get(f'result:{url}')
-        if result:
-            return result.decode('utf-8')
-        result = method(url)
-        redis_store.set(f'count:{url}', 0)
-        redis_store.setex(f'result:{url}', 10, result)
-        return result
-    return invoker
+# Connect to Redis server
+redis_client = redis.StrictRedis(
+        host='localhost',
+        port=6379,
+        decode_responses=True
+        )
 
 
-@data_cacher
+def cache_and_count_access(func: Callable) -> Callable:
+    """
+    Decorator to cache the result of a
+    function and count the number of accesses.
+    """
+    @wraps(func)
+    def wrapper(url: str) -> str:
+        # Count the number of accesses
+        count_key = f"count:{url}"
+        current_count = redis_client.incr(count_key)
+
+        # Get the cached result if available
+        cache_key = f"cache:{url}"
+        cached_result = redis_client.get(cache_key)
+
+        if cached_result:
+            return cached_result
+        else:
+            # Call the original function and cache the result
+            result = func(url)
+            redis_client.setex(cache_key, 10, result)
+
+            return result
+
+    return wrapper
+
+
+@cache_and_count_access
 def get_page(url: str) -> str:
-    '''Returns the content of a URL after caching the request's response,
-    and tracking the request.
-    '''
-    return requests.get(url).text
+    """
+    Get the HTML content of a URL
+    and cache the result with an expiration time of 10 seconds.
+    """
+    response = requests.get(url)
+    return response.text
